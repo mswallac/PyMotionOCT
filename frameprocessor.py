@@ -40,7 +40,8 @@ class FrameProcessor:
             else:
                 nn0[i]=minind
                 nn1[i]=minind+1
-                
+        self.nn0_np=nn0
+        self.nn1_np=nn1
         # do preliminary setup for opencl side of things (platform,device,context,queue)
         self.dtype = np.complex64
         self.platform = cl.get_platforms()
@@ -49,26 +50,43 @@ class FrameProcessor:
         self.device = self.device[0]
         self.context = cl.Context([self.device])
         self.queue = cl.CommandQueue(self.context)
-        
-        self.nn0 = self.cast_to_dev(nn0)
-        self.nn1 = self.cast_to_dev(nn1)
-        self.k = self.cast_to_dev(k)
-        self.win = self.cast_to_dev(win)
-        self.lam = self.cast_to_dev(lam)
-        self.d_lam = self.cast_to_dev(d_lam)
+        mflags = cl.mem_flags
+        self.nn0 = cl.Buffer(self.context, mflags.READ_ONLY | mflags.COPY_HOST_PTR, hostbuf=nn0)
+        self.nn1 = cl.Buffer(self.context, mflags.READ_ONLY | mflags.COPY_HOST_PTR, hostbuf=nn1)
+        self.k = cl.Buffer(self.context, mflags.READ_ONLY | mflags.COPY_HOST_PTR, hostbuf=k)
+        self.win = cl.Buffer(self.context, mflags.READ_ONLY | mflags.COPY_HOST_PTR, hostbuf=win)
+        self.lam = cl.Buffer(self.context, mflags.READ_ONLY | mflags.COPY_HOST_PTR, hostbuf=lam)
+        self.d_lam = cl.Buffer(self.context, mflags.READ_ONLY | mflags.COPY_HOST_PTR, hostbuf=d_lam)
+        self.npdata = np.zeros((2048))
+        self.npres = np.zeros((2048))
+        self.data = cl.Buffer(self.context, mflags.COPY_HOST_PTR, hostbuf=self.npdata)
+        self.result = cl.Buffer(self.context, mflags.COPY_HOST_PTR, hostbuf=self.npres)
         
         # do reikna setup for FFT
         self.api = cluda.ocl_api()
         self.thr = self.api.Thread.create()
-        self.dshape = (2048,40)
+        self.dshape = (2048)
         arbdata = self.thr.to_device(np.zeros(self.dshape).astype(self.dtype))
         self.fft = FFT(arbdata,axes=(0,)).compile(self.thr)
-        self.interp_hann = cl.elementwise.ElementwiseKernel(self.context,
-                               "float *lam_s, float *lam, float *k, int *nn0, int *nn1, float *d_lam, float *win, float *res",
-                               "res[i] = lam_s[nn0[i]] + (k[i] - lam[nn1[i]])/(lam_s[nn0[i]] - lam_s[nn1[i]])*d_lam[0]*win[i]",
-                               "interp")
-        # 
-        # replace nan with y1 using scan kernel
+
+        self.program = cl.Program(self.context, """
+        __kernel void interp_hann(global float *lam_s, global float *lam, global float *k, global int *nn0,
+                                  global int *nn1, global float *d_lam, global float *win, global float *res)
+        {
+            int i = get_global_id(0);
+            
+    		if ((lam_s[nn0[i]] - lam_s[nn1[i]]) < 1E-12)
+            {
+    			res[i] = lam_s[nn0[i]]*win[i];
+    		}
+    		else
+    		{
+    			res[i] = (lam_s[nn0[i]] + (k[i] - lam[nn1[i]])/(lam_s[nn0[i]] - lam_s[nn1[i]]))*d_lam[0]*win[i];
+    		}
+
+        }
+        """).build()
+    
     
     def reikna_FFT(self,data):
         inp = self.thr.to_device(data)
@@ -77,24 +95,18 @@ class FrameProcessor:
         return outp.get()
     
     def interp_hann_wrapper(self,data):
-        temp = self.cast_to_dev(data[:,0])
-        result = cl.array.empty_like(temp)
-        outp = []
-        for i in range(data.shape[1]):
-            self.set_data_dev(temp,data[:,i])
-            evt = self.interp_hann(temp,self.lam,self.k,self.nn0,self.nn1,self.d_lam,self.win,result)
-            outp.append(result.get())
-        return np.array(outp)
-    
-    def cast_to_dev(self,data):
-        return cl.array.to_device(self.queue,np.ascontiguousarray(data.astype(data.dtype)))
-    
-    def set_data_dev(self,temp,data):
-        temp.set(np.ascontiguousarray(data))
-        return
+        self.data = cl.Buffer(self.context, cl.mem_flags.COPY_HOST_PTR, hostbuf=data)
+        self.result = cl.Buffer(self.context, cl.mem_flags.COPY_HOST_PTR, hostbuf=self.npres)
+        self.program.interp_hann(self.queue,(len(self.npres),),(1,),
+                                     self.data,self.lam,self.k,self.nn0,self.nn1,self.d_lam,
+                                     self.win,self.result)
+        cl.enqueue_copy(self.queue,self.npres,self.result)
+        return self.npres
     
     def process_frame(self,data):
         ih = self.interp_hann_wrapper(data)
+        a=(np.nonzero(np.isnan(ih))[0])
+        print([self.nn0_np[x] for x in a], [self.nn1_np[x] for x in a])
         ft = self.reikna_FFT(ih)
         return ft
 
@@ -106,13 +118,13 @@ if __name__ == '__main__':
     print('Initialization time (s): ',time.time()-t)
     
     #lets take a look at how fast reikna FFT is
-    shape = (2048,40)
+    shape = frameproc.dshape
     for i in range(10):
-        data = np.ascontiguousarray(np.random.normal(size=shape))
+        data = np.ascontiguousarray(np.load('data.npy')[:,i,0])
         t=time.time()
         result = frameproc.process_frame(data)
         print(result)
-        print('Frame Proc. Time #'+str(i+1)+' time (s): ',"%.20f"%(time.time()-t))
+        print('Frame Proc. Time #'+str(i+1)+' time (s): ',"%.8f"%(time.time()-t))
         
         
     

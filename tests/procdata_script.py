@@ -24,7 +24,7 @@ if __name__ == "__main__":
     #
     
     # Load some test data!
-    rawdata = np.load('fig8_13_raw_5000nm_2p0.npy')
+    rawdata = np.load('data.npy')
     t0 = rawdata.flatten().astype(np.uint16)
     
     # Load chirp matrix, containing wavelengths corresponding to spectrum bins for lambda->k interpolation
@@ -95,7 +95,7 @@ if __name__ == "__main__":
 
         }
         """).build()
-        
+    
     ## Step #7. Create a command queue for the target device.
     queue = cl.CommandQueue(context)
     
@@ -117,12 +117,12 @@ if __name__ == "__main__":
     print(nn0.shape,nn1.shape,window.shape,k.shape,t0.shape,lam.shape,result.shape)
     
     # run kernel and get event to wait for
-    evt=program.interp_hann(queue, result.shape, (1,), raw_buf, win_buf, k_buf,
+    program.interp_hann(queue, (len(result),), None, raw_buf, win_buf, k_buf,
                         n0_buf, n1_buf, lam_buf, d_lam, dest_buf)
      
     ## Step #11. Move the kernel’s output data to host memory.
     
-    cl.enqueue_copy(queue,result,dest_buf,wait_for=evt)
+    cl.enqueue_copy(queue,result,dest_buf)
     
     print(result)
     ## Step #12. Release context, program, kernels and memory.

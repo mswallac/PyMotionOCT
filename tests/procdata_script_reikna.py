@@ -20,7 +20,7 @@ import numpy as np
 import time
 
 # Load some test data!
-rawdata = np.load('fig8_13_raw_5000nm_2p0.npy').squeeze()
+rawdata = np.load('data.npy').squeeze()
 
 # Load chirp matrix, containing wavelengths corresponding to spectrum bins for lambda->k interpolation
 lam = np.load('lam.npy').astype(np.float16)

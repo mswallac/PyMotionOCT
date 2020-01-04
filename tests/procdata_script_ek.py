@@ -20,7 +20,7 @@ from reikna import fft
 if __name__ == "__main__":
     
     # Load some test data!
-    rawdata = np.load('fig8_13_raw_5000nm_2p0.npy')
+    rawdata = np.load('data.npy')
     posdata = np.zeros((2048,40))
     flat_rawdata = rawdata.flatten()
     #t0 = flat_rawdata[0:2048*40].astype(np.uint16)  # The first B-scan for use with the demo\
