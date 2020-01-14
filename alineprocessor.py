@@ -16,7 +16,7 @@ from reikna import cluda
 import time
 import matplotlib.pyplot as plt
 
-class FrameProcessor:
+class AlineProcessor:
     
     def __init__(self,localsize):
         
@@ -129,27 +129,26 @@ class FrameProcessor:
         return ft
 
 if __name__ == '__main__':
+    local_wgsize=32
+    #initialize frameprocessor
+    print('With local group size %d'%local_wgsize)
+    t=time.time()
+    aproc = AlineProcessor(local_wgsize)
+    print('Initialized in %.0fms: '%(1000*(time.time()-t)))
     
-    localsizes = [2**(i) for i in range(11)]
-    for j in localsizes:
-        print('With local group size %d'%j)
-        #initialize frameprocessor
-        t=time.time()
-        frameproc = FrameProcessor(j)
-        print('Initialized in %.0fms: '%(1000*(time.time()-t)))
+    nt=20000
+    intervals = []
+    results=[]
+    data = (np.load('data.npy')[:,:,0])
+    
+    for i in range(nt):
+        t = time.time()
+        results.append(aproc.process_aline(np.ascontiguousarray(data[:,i])))
+        intervals.append(time.time()-t)
         
-        nt=20000
-        intervals = []
-        results=[]
-        data = (np.load('data.npy')[:,:,0])
-        for i in range(nt):
-            t = time.time()
-            results.append(frameproc.process_aline(np.ascontiguousarray(data[:,i])))
-            intervals.append(time.time()-t)
-            
-        print('Over %d alines:'%nt)
-        print('Average A-line rate: %.0fHz'%(1/(np.mean(intervals))))
-        print('Average A-line proc. time: %.2fms'%(1000*(np.mean(intervals))))
+    print('Over %d alines:'%nt)
+    print('Average A-line rate: %.0fHz'%(1/(np.mean(intervals))))
+    print('Average A-line proc. time: %.2fms'%(1000*(np.mean(intervals))))
         
         
     
