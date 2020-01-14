@@ -14,10 +14,11 @@ from pyopencl import array
 from reikna.fft import FFT
 from reikna import cluda
 import time
+import matplotlib.pyplot as plt
 
-class FrameProcessor:
+class AlineProcessor:
     
-    def __init__(self):
+    def __init__(self,localsize):
         
         # load wavelength array, hanning window, linear in wavenumber interpolation prereqs.
         lam = np.load('lam.npy')
@@ -40,6 +41,7 @@ class FrameProcessor:
             else:
                 nn0[i]=minind
                 nn1[i]=minind+1
+                
         self.nn0_np=nn0
         self.nn1_np=nn1
         # do preliminary setup for opencl side of things (platform,device,context,queue)
@@ -50,6 +52,7 @@ class FrameProcessor:
         self.device = self.device[0]
         self.context = cl.Context([self.device])
         self.queue = cl.CommandQueue(self.context)
+        
         mflags = cl.mem_flags
         self.nn0 = cl.Buffer(self.context, mflags.READ_ONLY | mflags.COPY_HOST_PTR, hostbuf=nn0)
         self.nn1 = cl.Buffer(self.context, mflags.READ_ONLY | mflags.COPY_HOST_PTR, hostbuf=nn1)
@@ -57,8 +60,13 @@ class FrameProcessor:
         self.win = cl.Buffer(self.context, mflags.READ_ONLY | mflags.COPY_HOST_PTR, hostbuf=win)
         self.lam = cl.Buffer(self.context, mflags.READ_ONLY | mflags.COPY_HOST_PTR, hostbuf=lam)
         self.d_lam = cl.Buffer(self.context, mflags.READ_ONLY | mflags.COPY_HOST_PTR, hostbuf=d_lam)
+        
         self.npdata = np.zeros((2048))
         self.npres = np.zeros((2048))
+        self.result_ih = cl.Buffer(self.context, cl.mem_flags.COPY_HOST_PTR, hostbuf=self.npres)
+        self.result_nan = cl.Buffer(self.context, cl.mem_flags.COPY_HOST_PTR, hostbuf=self.npres)
+        self.global_wgsize = (2048,)
+        self.local_wgsize = (localsize,)
         self.data = cl.Buffer(self.context, mflags.COPY_HOST_PTR, hostbuf=self.npdata)
         self.result = cl.Buffer(self.context, mflags.COPY_HOST_PTR, hostbuf=self.npres)
         
@@ -67,8 +75,8 @@ class FrameProcessor:
         self.thr = self.api.Thread.create()
         self.dshape = (2048)
         arbdata = self.thr.to_device(np.zeros(self.dshape).astype(self.dtype))
+        self.outp = self.thr.array(self.dshape,self.dtype)
         self.fft = FFT(arbdata,axes=(0,)).compile(self.thr)
-
         self.program = cl.Program(self.context, """
         __kernel void interp_hann(global float *lam_s, global float *lam, global float *k, global int *nn0,
                                   global int *nn1, global float *d_lam, global float *win, global float *res)
@@ -85,46 +93,63 @@ class FrameProcessor:
     		}
 
         }
+        __kernel void replace_nan(global float *input, global float *res)
+        {
+            int i = get_global_id(0);
+            float val = input[i];
+            
+            if (isnan(val))
+            {
+                res[i]=1;
+            }
+            else
+            {
+                res[i]=val;
+            }
+        }
         """).build()
-    
-    
+        
     def reikna_FFT(self,data):
         inp = self.thr.to_device(data)
-        outp = self.thr.array(inp.shape,self.dtype)
-        self.fft(outp,inp,inverse=0)
-        return outp.get()
-    
+        self.fft(self.outp,inp,inverse=0)
+        return self.outp.get()
+        
     def interp_hann_wrapper(self,data):
         self.data = cl.Buffer(self.context, cl.mem_flags.COPY_HOST_PTR, hostbuf=data)
-        self.result = cl.Buffer(self.context, cl.mem_flags.COPY_HOST_PTR, hostbuf=self.npres)
-        self.program.interp_hann(self.queue,(len(self.npres),),(1,),
-                                     self.data,self.lam,self.k,self.nn0,self.nn1,self.d_lam,
-                                     self.win,self.result)
-        cl.enqueue_copy(self.queue,self.npres,self.result)
+        self.program.interp_hann(self.queue,self.global_wgsize,self.local_wgsize,self.data,self.lam,self.k,self.nn0,self.nn1,
+                                     self.d_lam,self.win,self.result_ih)
+        self.program.replace_nan(self.queue,self.global_wgsize,self.local_wgsize,self.result_ih,self.result_nan)
+        cl.enqueue_copy(self.queue,self.npres,self.result_nan)
         return self.npres
+        return
     
-    def process_frame(self,data):
-        ih = self.interp_hann_wrapper(data)
-        a=(np.nonzero(np.isnan(ih))[0])
-        print([self.nn0_np[x] for x in a], [self.nn1_np[x] for x in a])
-        ft = self.reikna_FFT(ih)
+    def process_aline(self,data):
+        self.interp_hann_wrapper(data)
+        ft = self.reikna_FFT(self.npres)
         return ft
 
 if __name__ == '__main__':
     
-    #initialize frameprocessor
-    t=time.time()
-    frameproc = FrameProcessor()
-    print('Initialization time (s): ',time.time()-t)
-    
-    #lets take a look at how fast reikna FFT is
-    shape = frameproc.dshape
-    for i in range(10):
-        data = np.ascontiguousarray(np.load('data.npy')[:,i,0])
+    localsizes = [2**(i) for i in range(11)]
+    for j in localsizes:
+        print('With local group size %d'%j)
+        #initialize frameprocessor
         t=time.time()
-        result = frameproc.process_frame(data)
-        print(result)
-        print('Frame Proc. Time #'+str(i+1)+' time (s): ',"%.8f"%(time.time()-t))
+        aproc = AlineProcessor(j)
+        print('Initialized in %.0fms: '%(1000*(time.time()-t)))
+        
+        nt=20000
+        intervals = []
+        results=[]
+        data = (np.load('data.npy')[:,:,0])
+        for i in range(nt):
+            t = time.time()
+            results.append(aproc.process_aline(np.ascontiguousarray(data[:,i])))
+            intervals.append(time.time()-t)
+            
+        print('Over %d alines:'%nt)
+        print('Average A-line rate: %.0fHz'%(1/(np.mean(intervals))))
+        print('Average A-line proc. time: %.2fms'%(1000*(np.mean(intervals))))
         
         
     
