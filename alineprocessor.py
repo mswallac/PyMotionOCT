@@ -28,11 +28,10 @@ class AlineProcessor:
         d_lam = np.asarray([lam_max-lam_min]).astype(np.float32)
         d_k = (1/lam_min - 1/lam_max)/2048
         k = np.array([1/((1/lam_max)+d_k*(2048-i)) for i in range(2048)]).astype(np.float32)
-        print(k)
+        
+        # Find nearest neighbors for interpolation prep.
         nn0 = np.zeros((2048,),np.int32)
         nn1 = np.zeros((2048,),np.int32)
-        
-        # find nearest neighbors for each point in the lambda spec for interp prep.
         for i in range(1,2047):
             res = np.abs(lam-k[i])
             minind = np.argmin(res)
@@ -42,7 +41,6 @@ class AlineProcessor:
             else:
                 nn0[i]=minind
                 nn1[i]=minind+1
-        
         self.nn0_np=nn0
         self.nn1_np=nn1
         
