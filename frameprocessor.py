@@ -127,7 +127,7 @@ class FrameProcessor():
     # Wraps FFT kernel
     def FFT(self,data):
         inp = self.thr.to_device(self.npcast(data,self.dt_fft))
-        self.fft(inp,inp,inverse=0)
+        self.fft(inp,inp)
         self.result = inp.get()
         return
     
