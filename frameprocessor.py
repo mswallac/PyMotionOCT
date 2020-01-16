@@ -152,8 +152,8 @@ if __name__ == '__main__':
     fp = FrameProcessor(n)
     data1 = np.load('data.npy').flatten()
     times = []
+    data = fp.npcast(data1[0:2048*n],fp.dt_prefft)
     for i in range(1000):
-        data = fp.npcast(data1[0:2048*n],fp.dt_prefft)
         t=time.time()
         res = fp.proc_frame(data)
         times.append(time.time()-t)
