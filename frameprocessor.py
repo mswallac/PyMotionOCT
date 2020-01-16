@@ -9,10 +9,11 @@ import numpy as np
 import pyopencl as cl
 from pyopencl import cltypes
 from pyopencl import array
-from reikna.fft import FFT
-from reikna import cluda
+from gpyfft.fft import FFT
 import time
 import matplotlib.pyplot as plt
+import gpyfft.benchmark
+gpyfft.benchmark.run()
 
 class FrameProcessor():
     
@@ -26,8 +27,10 @@ class FrameProcessor():
         
         # Define data formatting
         n = nlines # number of A-lines per frame
+        self.n = n
         alen = 2048 # length of A-line / # of spec. bins
         self.dshape = (alen*n,)
+        self.dshape_fftout = (1025,n)
         self.dt_prefft = np.float32
         self.dt_fft = np.complex64
         self.data_prefft = self.npcast(np.zeros(self.dshape),self.dt_prefft)
@@ -86,17 +89,10 @@ class FrameProcessor():
         self.npres_hann = self.npcast(np.zeros(self.dshape),self.dt_prefft)
         self.result_interp = cl.Buffer(self.context, cl.mem_flags.COPY_HOST_PTR, hostbuf=self.npres_interp)
         self.result_hann = cl.Buffer(self.context, cl.mem_flags.COPY_HOST_PTR, hostbuf=self.npres_hann)
-        
+        self.result_fft = cl.array.to_device(self.queue,self.npcast(np.zeros(self.dshape_fftout),self.dt_fft))
         # Define POCL global / local work group sizes
         self.global_wgsize = (2048,n)
         self.local_wgsize = (512,1)
-        
-        # Initialize Reikna API, thread, FFT plan, output memory
-        self.api = cluda.ocl_api()
-        self.thr = self.api.Thread.create()
-        self.outp = self.thr.array((2048,n),self.dt_fft)
-        self.result = self.npcast(np.zeros((2048,n)),self.dt_fft)
-        self.fft = FFT(self.result,axes=(0,)).compile(self.thr)
         
         # kernels for hanning window, and interpolation
         self.program = cl.Program(self.context, """
@@ -126,11 +122,11 @@ class FrameProcessor():
         self.interp = self.program.interp
     
         # wraps reikna fft
-    def FFT(self,data):
-        inp = self.thr.to_device(self.npcast(data,self.dt_fft))
-        self.fft(self.outp,inp,inverse=0)
-        self.result = self.outp.get()
-        return
+    def gFFT(self):
+        inp = cl.array.to_device(self.queue,self.npres_interp).reshape((2048,self.n))
+        fft_kern = FFT(self.context,self.queue,inp,self.result_fft,axes=(0,))
+        fft_kern.enqueue()
+        return self.result_fft.get()
     
     def interp_hann(self,data):
         self.data_pfg = cl.Buffer(self.context, cl.mem_flags.COPY_HOST_PTR, hostbuf=data)
@@ -143,8 +139,8 @@ class FrameProcessor():
     
     def proc_frame(self,data):
         self.interp_hann(data)
-        self.FFT(self.rshp(self.npres_interp,(2048,n)))
-        return self.result
+        res = self.gFFT()
+        return res
         
 if __name__ == '__main__':
     
@@ -152,12 +148,13 @@ if __name__ == '__main__':
     fp = FrameProcessor(n)
     data1 = np.load('data.npy').flatten()
     times=[]
-    for i in range(1000):
+    for i in range(1):
         data = fp.npcast(data1[0:2048*n],fp.dt_prefft)
         t=time.time()
         res = fp.proc_frame(data)
         times.append(time.time()-t)
-    res = np.reshape(res,(2048,n),'C')
+    res = np.reshape(res,(1025,n),'C')
+    plt.imshow(20*np.log10((np.abs(res))))
     avginterval = np.mean(times)
     frate=(1/avginterval)
     print('Average framerate over 1000 frames: %.0fHz'%frate)
