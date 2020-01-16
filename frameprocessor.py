@@ -94,7 +94,6 @@ class FrameProcessor():
         # Initialize Reikna API, thread, FFT plan, output memory
         self.api = cluda.ocl_api()
         self.thr = self.api.Thread.create()
-        self.outp = self.thr.array((2048,n),self.dt_fft)
         self.result = self.npcast(np.zeros((2048,n)),self.dt_fft)
         self.fft = FFT(self.result,axes=(0,)).compile(self.thr)
         
@@ -128,8 +127,8 @@ class FrameProcessor():
     # Wraps FFT kernel
     def FFT(self,data):
         inp = self.thr.to_device(self.npcast(data,self.dt_fft))
-        self.fft(self.outp,inp,inverse=0)
-        self.result = self.outp.get()
+        self.fft(inp,inp,inverse=0)
+        self.result = inp.get()
         return
     
     # Wraps interpolation and hanning window kernels
@@ -153,7 +152,7 @@ if __name__ == '__main__':
     data1 = np.load('data.npy').flatten()
     times = []
     data = fp.npcast(data1[0:2048*n],fp.dt_prefft)
-    for i in range(1000):
+    for i in range(5000):
         t=time.time()
         res = fp.proc_frame(data)
         times.append(time.time()-t)
