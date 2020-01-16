@@ -144,21 +144,21 @@ class FrameProcessor():
     def proc_frame(self,data):
         self.interp_hann(data)
         self.FFT(self.rshp(self.npres_interp,(2048,n)))
-        res2=np.fft.fft(self.rshp(self.npres_interp,(2048,n)),axis=0)
-        return self.result,res2
+        return self.result
         
 if __name__ == '__main__':
     
-    n=200
+    n=40
     fp = FrameProcessor(n)
-    data = np.load('data.npy').flatten()
-    data = fp.npcast(data[0:2048*n],fp.dt_prefft)
-    plt.figure()
-    plt.plot(data)
-    t=time.time()
-    res,res2 = fp.proc_frame(data)
+    data1 = np.load('data.npy').flatten()
+    times=[]
+    for i in range(1000):
+        data = fp.npcast(data1[0:2048*n],fp.dt_prefft)
+        t=time.time()
+        res = fp.proc_frame(data)
+        times.append(time.time()-t)
     res = np.reshape(res,(2048,n),'C')
-    plt.subplot(121)
-    plt.imshow(20*np.log10(np.abs(res[0:2048,:])))
-    plt.subplot(122)
-    plt.imshow(20*np.log10(np.abs(res2[0:2048,:])))
+    avginterval = np.mean(times)
+    frate=(1/avginterval)
+    print('Average framerate over 1000 frames: %.0fHz'%frate)
+    print('Effective A-line rate over 1000 frames: %.0fHz'%(frate*n))
