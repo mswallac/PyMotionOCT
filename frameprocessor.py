@@ -111,27 +111,28 @@ class FrameProcessor():
                              __global const float *k_raw,__global const float *k_lin,__global float *res)
         {
             int i_shift = (get_global_size(0)*get_global_id(1));
-            int i = get_global_id(0)+i_shift;
-            int j = get_local_id(0)+(get_group_id(0)*get_local_size(0));
-            float x1 = k_raw[nn0[j]];
-            float x2 = k_raw[nn1[j]];
-            float y1 = y[i_shift+nn0[j]];
-            float y2 = y[i_shift+nn1[j]];
-            float x = k_lin[j];
-            res[i]=y1+((x-x1)*((y2-y1)/(x2-x1))); 
+            int i_glob = get_global_id(0)+i_shift;
+            int i_loc = get_local_id(0)+(get_group_id(0)*get_local_size(0));
+            float x1 = k_raw[nn0[i_loc]];
+            float x2 = k_raw[nn1[i_loc]];
+            float y1 = y[i_shift+nn0[i_loc]];
+            float y2 = y[i_shift+nn1[i_loc]];
+            float x = k_lin[i_loc];
+            res[i_glob]=y1+((x-x1)*((y2-y1)/(x2-x1))); 
         }
         """).build()
         
         self.hann = self.program.hann
         self.interp = self.program.interp
     
-        # wraps reikna fft
+    # Wraps FFT kernel
     def FFT(self,data):
         inp = self.thr.to_device(self.npcast(data,self.dt_fft))
         self.fft(self.outp,inp,inverse=0)
         self.result = self.outp.get()
         return
     
+    # Wraps interpolation and hanning window kernels
     def interp_hann(self,data):
         self.data_pfg = cl.Buffer(self.context, cl.mem_flags.COPY_HOST_PTR, hostbuf=data)
         self.hann.set_args(self.data_pfg,self.win_g,self.result_hann)
