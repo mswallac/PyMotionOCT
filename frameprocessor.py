@@ -148,11 +148,10 @@ class FrameProcessor():
         return self.result
         
 if __name__ == '__main__':
-    
-    n=40
+    n=60
     fp = FrameProcessor(n)
     data1 = np.load('data.npy').flatten()
-    times=[]
+    times = []
     for i in range(1000):
         data = fp.npcast(data1[0:2048*n],fp.dt_prefft)
         t=time.time()
@@ -161,5 +160,7 @@ if __name__ == '__main__':
     res = np.reshape(res,(2048,n),'C')
     avginterval = np.mean(times)
     frate=(1/avginterval)
+    afrate=frate*n
+    print('With n = %d '%n)
     print('Average framerate over 1000 frames: %.0fHz'%frate)
-    print('Effective A-line rate over 1000 frames: %.0fHz'%(frate*n))
+    print('Effective A-line rate over 1000 frames: %.0fHz'%afrate)
