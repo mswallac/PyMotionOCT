@@ -121,7 +121,7 @@ class FrameProcessor():
         {
             int i = get_global_id(0)+(get_global_size(0)*get_global_id(1));
             int j = get_local_id(0)+(get_group_id(0)*get_local_size(0));
-            res[i] = inp[i];
+            res[i] = inp[i]*win[j];
         }
 
         __kernel void interp(__global float *y,__global const int *nn0,__global const int *nn1,
@@ -135,7 +135,7 @@ class FrameProcessor():
             float y1 = y[i_shift+nn0[i_loc]];
             float y2 = y[i_shift+nn1[i_loc]];
             float x = k_lin[i_loc];
-            res[i_glob]=y[i_glob];
+            res[i_glob]=y1+((x-x1)*((y2-y1)/(x2-x1))); 
         }
         """).build()
 
