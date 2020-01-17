@@ -5,12 +5,14 @@ Created on Wed Jan 15 10:17:16 2020
 @author: Mike
 """
 
-import numpy as np
-import pyopencl as cl
+from reikna.core import Annotation, Type, Transformation, Parameter
+from reikna.cluda import dtypes, any_api
 from pyopencl import cltypes
 from pyopencl import array
+import pyopencl as cl
 from reikna.fft import FFT
 from reikna import cluda
+import numpy as np
 import time
 import matplotlib.pyplot as plt
 
@@ -21,7 +23,20 @@ class FrameProcessor():
 
     def rshp(self,inp,shape):
         return np.reshape(inp,shape,'C')
-
+    
+    # thanks @fjarri https://github.com/fjarri/reikna/blob/develop/examples/demo_real_to_complex_fft.py
+    def get_complex_trf(self,arr):
+        complex_dtype = dtypes.complex_for(arr.dtype)
+        return Transformation(
+            [Parameter('output', Annotation(Type(complex_dtype, arr.shape), 'o')),
+            Parameter('input', Annotation(arr, 'i'))],
+            """
+            ${output.store_same}(
+                COMPLEX_CTR(${output.ctype})(
+                    ${input.load_same},
+                    0));
+            """)
+    
     def __init__(self,nlines):
 
         # Define data formatting
@@ -95,7 +110,9 @@ class FrameProcessor():
         self.api = cluda.ocl_api()
         self.thr = self.api.Thread(self.queue)
         self.result = self.npcast(np.zeros((2048,n)),self.dt_fft)
-        self.fft = FFT(self.result,axes=(0,)).compile(self.thr)
+        self.trf = self.get_complex_trf(self.data_prefft)
+        self.fft = FFT(self.trf.output,axes=(0,))
+        self.cfft = self.fft.parameter.input.connect(self.trf, self.trf.output, new_input=self.trf.input).compile(self.thr)
 
         # kernels for hanning window, and interpolation
         self.program = cl.Program(self.context, """
@@ -123,10 +140,10 @@ class FrameProcessor():
 
         self.hann = self.program.hann
         self.interp = self.program.interp
-
+    
     # Wraps FFT kernel
     def FFT(self,data):
-        self.fft(data, data)
+        self.cfft(data, data)
         return
 
     # Wraps interpolation and hanning window kernels
@@ -136,13 +153,16 @@ class FrameProcessor():
         cl.enqueue_nd_range_kernel(self.queue,self.hann,self.global_wgsize,self.local_wgsize)
         self.interp.set_args(self.result_hann,self.nn0_g,self.nn1_g,self.k_raw_g,self.k_lin_g,self.result_interp)
         cl.enqueue_nd_range_kernel(self.queue,self.interp,self.global_wgsize,self.local_wgsize)
+        # for ground truth with np
+        cl.enqueue_copy(self.queue,self.npres_interp,self.result_interp)
         return
 
     def proc_frame(self,data):
         self.interp_hann(data)
+        res_np = np.fft.fft(self.npres_interp,axis=0)
         self.FFT(self.result_interp)
         cl.enqueue_copy(self.queue,self.npres_interp,self.result_interp)
-        return self.npres_interp
+        return self.npres_interp,res_np
 
 if __name__ == '__main__':
     n=60
@@ -150,12 +170,17 @@ if __name__ == '__main__':
     data1 = np.load('data.npy').flatten()
     times = []
     data = fp.npcast(data1[0:2048*n],fp.dt_prefft)
-    for i in range(5000):
+    for i in range(1):
         t=time.time()
-        res = fp.proc_frame(data)
+        res,res2 = fp.proc_frame(data)
         times.append(time.time()-t)
     res = np.reshape(res,(2048,n),'C')
+    print(res)
+    plt.subplot(1,2,1,title='My output')
     plt.imshow(20*np.log10((np.abs(res))))
+    res2 = np.reshape(res2,(2048,n),'C')
+    plt.subplot(1,2,2,title='True (numpy output)')
+    plt.imshow(20*np.log10((np.abs(res2))))
     avginterval = np.mean(times)
     frate=(1/avginterval)
     afrate=frate*n
