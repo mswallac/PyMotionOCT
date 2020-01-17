@@ -42,7 +42,8 @@ class FrameProcessor():
         # Define data formatting
         n = nlines # number of A-lines per frame
         alen = 2048 # length of A-line / # of spec. bins
-        self.dshape = (alen*n,)
+        self.n = n
+        self.dshape = (alen,n)
         self.dt_prefft = np.float32
         self.dt_fft = np.complex64
         self.data_prefft = self.npcast(np.zeros(self.dshape),self.dt_prefft)
@@ -109,18 +110,18 @@ class FrameProcessor():
         # Initialize Reikna API, thread, FFT plan, output memory
         self.api = cluda.ocl_api()
         self.thr = self.api.Thread(self.queue)
-        self.result = self.npcast(np.zeros((2048,n)),self.dt_fft)
         self.trf = self.get_complex_trf(self.data_prefft)
         self.fft = FFT(self.trf.output,axes=(0,))
         self.cfft = self.fft.parameter.input.connect(self.trf, self.trf.output, new_input=self.trf.input).compile(self.thr)
-
+        self.fft_buffer = self.thr.empty_like(self.cfft.parameter.output)
+        print(self.trf.signature,self.cfft.signature)
         # kernels for hanning window, and interpolation
         self.program = cl.Program(self.context, """
         __kernel void hann(__global float *inp, __global const float *win, __global float *res)
         {
             int i = get_global_id(0)+(get_global_size(0)*get_global_id(1));
             int j = get_local_id(0)+(get_group_id(0)*get_local_size(0));
-            res[i] = inp[i]*win[j];
+            res[i] = inp[i];
         }
 
         __kernel void interp(__global float *y,__global const int *nn0,__global const int *nn1,
@@ -134,7 +135,7 @@ class FrameProcessor():
             float y1 = y[i_shift+nn0[i_loc]];
             float y2 = y[i_shift+nn1[i_loc]];
             float x = k_lin[i_loc];
-            res[i_glob]=y1+((x-x1)*((y2-y1)/(x2-x1)));
+            res[i_glob]=y[i_glob];
         }
         """).build()
 
@@ -143,7 +144,7 @@ class FrameProcessor():
     
     # Wraps FFT kernel
     def FFT(self,data):
-        self.cfft(data, data)
+        self.cfft(self.fft_buffer, data)
         return
 
     # Wraps interpolation and hanning window kernels
@@ -153,35 +154,39 @@ class FrameProcessor():
         cl.enqueue_nd_range_kernel(self.queue,self.hann,self.global_wgsize,self.local_wgsize)
         self.interp.set_args(self.result_hann,self.nn0_g,self.nn1_g,self.k_raw_g,self.k_lin_g,self.result_interp)
         cl.enqueue_nd_range_kernel(self.queue,self.interp,self.global_wgsize,self.local_wgsize)
-        # for ground truth with np
         cl.enqueue_copy(self.queue,self.npres_interp,self.result_interp)
         return
 
     def proc_frame(self,data):
         self.interp_hann(data)
-        res_np = np.fft.fft(self.npres_interp,axis=0)
+        res_np = np.fft.fftn(self.npres_interp,axes=(0,))
         self.FFT(self.result_interp)
-        cl.enqueue_copy(self.queue,self.npres_interp,self.result_interp)
-        return self.npres_interp,res_np
+        res_gpu = self.fft_buffer.get()
+        return res_gpu,res_np
 
 if __name__ == '__main__':
     n=100
     fp = FrameProcessor(n)
-    data1 = np.load('data.npy').flatten()
-    times = []
-    data = fp.npcast(data1[0:2048*n],fp.dt_prefft)
-    for i in range(1000):
+    data = np.load('data.npy').flatten()[0:2048*n].astype(np.float32).reshape(2048,n)
+    data = np.zeros((2048,n)).astype(np.float32)
+    for x in range(n):
+        data[(1024-25):(1024+25):,x]+=1
+    times=[]
+    
+    for i in range(1):
         t=time.time()
         res,res2 = fp.proc_frame(data)
         times.append(time.time()-t)
-        
+    print(res,res2)
+    plt.figure()
+    plt.subplot(1,2,1)
     res = np.reshape(res,(2048,n),'C')
-    plt.subplot(1,2,1,title='My output')
-    plt.imshow(20*np.log10((np.abs(res[0:100,:]))))
+    plt.imshow(20*np.log10(np.abs(res[0:1024,:])))
     
+    plt.subplot(1,2,2)
     res2 = np.reshape(res2,(2048,n),'C')
-    plt.subplot(1,2,2,title='True (numpy output)')
-    plt.imshow(20*np.log10((np.abs(res2[0:100,:]))))
+    plt.imshow(20*np.log10(np.abs(res[0:1024,:])))
+    
     
     avginterval = np.mean(times)
     frate=(1/avginterval)
