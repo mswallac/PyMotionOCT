@@ -163,11 +163,11 @@ class FrameProcessor():
         return res_gpu
 
 if __name__ == '__main__':
-    nf=15000
+    nf=10000
     ns=[]
     fs=[]
     afs=[]
-    for n in range(2,120,4):
+    for n in range(2,200,4):
         fp = FrameProcessor(n)
         data = np.load('data.npy').flatten()[0:2048*n].astype(np.float32).reshape(2048,n)  
         times=[]
@@ -188,7 +188,9 @@ if __name__ == '__main__':
     plt.plot(ns,fs)
     plt.ylabel('Frame rate (Hz)')
     plt.xlabel('A-lines per frame (ct.)')
+    plt.title(''+fp.device.name)
     plt.figure()
     plt.plot(ns,afs)
+    plt.title(''+fp.device.name)
     plt.ylabel('A-line rate (Hz)')
     plt.xlabel('A-lines per frame (ct.)')
