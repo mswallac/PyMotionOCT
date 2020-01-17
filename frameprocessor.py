@@ -163,11 +163,11 @@ class FrameProcessor():
         return res_gpu
 
 if __name__ == '__main__':
-    nf=1000
+    nf=15000
     ns=[]
     fs=[]
     afs=[]
-    for n in range(1,120):
+    for n in range(2,120,4):
         fp = FrameProcessor(n)
         data = np.load('data.npy').flatten()[0:2048*n].astype(np.float32).reshape(2048,n)  
         times=[]
