@@ -85,7 +85,6 @@ class FrameProcessor():
         self.platform = self.platform[0]
         self.device = self.platform.get_devices()
         self.device = self.device[0]
-        print('Using:%s'%(self.device))
         self.context = cl.Context([self.device])
         self.queue = cl.CommandQueue(self.context)
 
@@ -168,7 +167,7 @@ if __name__ == '__main__':
     ns=[]
     fs=[]
     afs=[]
-    for n in [63]:
+    for n in range(1,120):
         fp = FrameProcessor(n)
         data = np.load('data.npy').flatten()[0:2048*n].astype(np.float32).reshape(2048,n)  
         times=[]
