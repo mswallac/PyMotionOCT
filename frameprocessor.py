@@ -155,6 +155,7 @@ if __name__ == '__main__':
         res = fp.proc_frame(data)
         times.append(time.time()-t)
     res = np.reshape(res,(2048,n),'C')
+    plt.imshow(20*np.log10((np.abs(res))))
     avginterval = np.mean(times)
     frate=(1/avginterval)
     afrate=frate*n
