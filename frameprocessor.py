@@ -85,6 +85,7 @@ class FrameProcessor():
         self.platform = self.platform[0]
         self.device = self.platform.get_devices()
         self.device = self.device[0]
+        print('Using:%s'%(self.device))
         self.context = cl.Context([self.device])
         self.queue = cl.CommandQueue(self.context)
 
@@ -114,7 +115,7 @@ class FrameProcessor():
         self.fft = FFT(self.trf.output,axes=(0,))
         self.cfft = self.fft.parameter.input.connect(self.trf, self.trf.output, new_input=self.trf.input).compile(self.thr)
         self.fft_buffer = self.thr.empty_like(self.cfft.parameter.output)
-        print(self.trf.signature,self.cfft.signature)
+        
         # kernels for hanning window, and interpolation
         self.program = cl.Program(self.context, """
         __kernel void hann(__global float *inp, __global const float *win, __global float *res)
@@ -154,43 +155,41 @@ class FrameProcessor():
         cl.enqueue_nd_range_kernel(self.queue,self.hann,self.global_wgsize,self.local_wgsize)
         self.interp.set_args(self.result_hann,self.nn0_g,self.nn1_g,self.k_raw_g,self.k_lin_g,self.result_interp)
         cl.enqueue_nd_range_kernel(self.queue,self.interp,self.global_wgsize,self.local_wgsize)
-        cl.enqueue_copy(self.queue,self.npres_interp,self.result_interp)
         return
 
     def proc_frame(self,data):
         self.interp_hann(data)
-        res_np = np.fft.fftn(self.npres_interp,axes=(0,))
-        self.FFT(self.result_interp)
+        self.FFT(self.result_hann)
         res_gpu = self.fft_buffer.get()
-        return res_gpu,res_np
+        return res_gpu
 
 if __name__ == '__main__':
-    n=100
-    fp = FrameProcessor(n)
-    data = np.load('data.npy').flatten()[0:2048*n].astype(np.float32).reshape(2048,n)
-    data = np.zeros((2048,n)).astype(np.float32)
-    for x in range(n):
-        data[(1024-25):(1024+25):,x]+=1
-    times=[]
-    
-    for i in range(1):
-        t=time.time()
-        res,res2 = fp.proc_frame(data)
-        times.append(time.time()-t)
-    print(res,res2)
+    nf=1000
+    ns=[]
+    fs=[]
+    afs=[]
+    for n in [63]:
+        fp = FrameProcessor(n)
+        data = np.load('data.npy').flatten()[0:2048*n].astype(np.float32).reshape(2048,n)  
+        times=[]
+        for i in range(nf):
+            t = time.time()
+            res = fp.proc_frame(data)
+            times.append(time.time()-t)
+        avginterval = np.mean(times)
+        frate=(1/avginterval)
+        afrate=frate*n
+        fs.append(frate)
+        afs.append(afrate)
+        ns.append(n)
+        print('With n = %d '%n)
+        print('Average framerate over %d frames: %.0fHz'%(nf,frate))
+        print('Effective A-line rate over %d frames: %.0fHz'%(nf,afrate))
     plt.figure()
-    plt.subplot(1,2,1)
-    res = np.reshape(res,(2048,n),'C')
-    plt.imshow(20*np.log10(np.abs(res[0:1024,:])))
-    
-    plt.subplot(1,2,2)
-    res2 = np.reshape(res2,(2048,n),'C')
-    plt.imshow(20*np.log10(np.abs(res[0:1024,:])))
-    
-    
-    avginterval = np.mean(times)
-    frate=(1/avginterval)
-    afrate=frate*n
-    print('With n = %d '%n)
-    print('Average framerate over 1000 frames: %.0fHz'%frate)
-    print('Effective A-line rate over 1000 frames: %.0fHz'%afrate)
+    plt.plot(ns,fs)
+    plt.ylabel('Frame rate (Hz)')
+    plt.xlabel('A-lines per frame (ct.)')
+    plt.figure()
+    plt.plot(ns,afs)
+    plt.ylabel('A-line rate (Hz)')
+    plt.xlabel('A-lines per frame (ct.)')

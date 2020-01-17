@@ -1,8 +1,6 @@
 # PyMotionOCT
 GPGPU implementation of SD-OCT preprocessing
 
-Main code is in frameprocessor.py
-
-data.npy and lam.npy required to run frameprocessor.py
-
-(currently only does benchmark)
+1. Download & extract repo
+2. Open frameprocessor.py in Spyder
+3. F5
