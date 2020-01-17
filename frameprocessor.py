@@ -165,22 +165,24 @@ class FrameProcessor():
         return self.npres_interp,res_np
 
 if __name__ == '__main__':
-    n=60
+    n=100
     fp = FrameProcessor(n)
     data1 = np.load('data.npy').flatten()
     times = []
     data = fp.npcast(data1[0:2048*n],fp.dt_prefft)
-    for i in range(1):
+    for i in range(1000):
         t=time.time()
         res,res2 = fp.proc_frame(data)
         times.append(time.time()-t)
+        
     res = np.reshape(res,(2048,n),'C')
-    print(res)
     plt.subplot(1,2,1,title='My output')
-    plt.imshow(20*np.log10((np.abs(res))))
+    plt.imshow(20*np.log10((np.abs(res[0:100,:]))))
+    
     res2 = np.reshape(res2,(2048,n),'C')
     plt.subplot(1,2,2,title='True (numpy output)')
-    plt.imshow(20*np.log10((np.abs(res2))))
+    plt.imshow(20*np.log10((np.abs(res2[0:100,:]))))
+    
     avginterval = np.mean(times)
     frate=(1/avginterval)
     afrate=frate*n
