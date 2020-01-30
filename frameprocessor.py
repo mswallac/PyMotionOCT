@@ -14,6 +14,7 @@ from reikna.fft import FFT
 from reikna import cluda
 import numpy as np
 import time
+import os
 import matplotlib.pyplot as plt
 
 class FrameProcessor():
@@ -87,7 +88,6 @@ class FrameProcessor():
         self.device = self.device[0]
         self.context = cl.Context([self.device])
         self.queue = cl.CommandQueue(self.context)
-
         # POCL input buffers
         mflags = cl.mem_flags
         self.win_g = cl.Buffer(self.context, mflags.READ_ONLY | mflags.COPY_HOST_PTR, hostbuf=hanning_win)
@@ -102,10 +102,10 @@ class FrameProcessor():
         self.npres_hann = self.npcast(np.zeros(self.dshape),self.dt_prefft)
         self.result_interp = cl.Buffer(self.context, cl.mem_flags.COPY_HOST_PTR, hostbuf=self.npres_interp)
         self.result_hann = cl.Buffer(self.context, cl.mem_flags.COPY_HOST_PTR, hostbuf=self.npres_hann)
-
+        
         # Define POCL global / local work group sizes
         self.global_wgsize = (2048,n)
-        self.local_wgsize = (512,1)
+        self.local_wgsize = (256,1)
 
         # Initialize Reikna API, thread, FFT plan, output memory
         self.api = cluda.ocl_api()
@@ -163,34 +163,41 @@ class FrameProcessor():
         return res_gpu
 
 if __name__ == '__main__':
+    # Number of frames to benchmark with and empty lists for framerate / aline rate
     nf=10000
     ns=[]
     fs=[]
     afs=[]
-    for n in range(2,200,4):
+    
+    for i,n in enumerate(range(4,100,2)):
+        
+        # Initialize frameprocessor object
         fp = FrameProcessor(n)
+        if i==0:
+            print('Using Device: %s'%(str(fp.device.name)))
+        
+        # Load / reshape / cast data
         data = np.load('data.npy').flatten()[0:2048*n].astype(np.float32).reshape(2048,n)  
         times=[]
+        
+        # Process many frames to get accurate bench
         for i in range(nf):
             t = time.time()
             res = fp.proc_frame(data)
             times.append(time.time()-t)
+        
+        # Calculate benchmark stats and add to lists
         avginterval = np.mean(times)
         frate=(1/avginterval)
         afrate=frate*n
         fs.append(frate)
         afs.append(afrate)
         ns.append(n)
+        
         print('With n = %d '%n)
         print('Average framerate over %d frames: %.0fHz'%(nf,frate))
         print('Effective A-line rate over %d frames: %.0fHz'%(nf,afrate))
-    plt.figure()
-    plt.plot(ns,fs)
-    plt.ylabel('Frame rate (Hz)')
-    plt.xlabel('A-lines per frame (ct.)')
-    plt.title(''+fp.device.name)
-    plt.figure()
-    plt.plot(ns,afs)
-    plt.title(''+fp.device.name)
-    plt.ylabel('A-line rate (Hz)')
-    plt.xlabel('A-lines per frame (ct.)')
+        
+    np.save('ns.npy',ns)
+    np.save('fs.npy',fs)
+    np.save('afs.npy',afs)
