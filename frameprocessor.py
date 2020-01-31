@@ -69,7 +69,8 @@ class FrameProcessor():
     
     def set_chirp_arr(self,arr):
         alen = 2048
-        lam = arr
+        self.chirp_arr = arr
+        lam = self.chirp_arr
         lmax = np.max(lam)
         lmin = np.min(lam)
         kmax = 1/lmin
