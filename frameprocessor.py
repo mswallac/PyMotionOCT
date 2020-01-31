@@ -50,7 +50,7 @@ class FrameProcessor():
         self.npres_hann = self.npcast(np.zeros(self.dshape),self.dt_prefft)
         self.result_interp = cl.Buffer(self.context, self.mflags.ALLOC_HOST_PTR | self.mflags.COPY_HOST_PTR, hostbuf=self.npres_interp)
         self.result_hann = cl.Buffer(self.context, self.mflags.ALLOC_HOST_PTR | self.mflags.COPY_HOST_PTR, hostbuf=self.npres_hann)
-
+        
         # Define POCL global / local work group sizes
         self.global_wgsize = (2048,n)
         self.local_wgsize = (256,1)
@@ -180,7 +180,7 @@ class FrameProcessor():
         cl.enqueue_nd_range_kernel(self.queue,self.interp,self.global_wgsize,self.local_wgsize)
         return
     
-    def hann(self,data):
+    def hann_wrap(self,data):
         self.data_pfg = cl.Buffer(self.context, self.mflags.COPY_HOST_PTR | self.mflags.ALLOC_HOST_PTR, hostbuf=data)
         self.hann.set_args(self.data_pfg,self.win_g,self.result_hann)
         cl.enqueue_nd_range_kernel(self.queue,self.hann,self.global_wgsize,self.local_wgsize)
@@ -193,7 +193,7 @@ class FrameProcessor():
         return res_gpu
     
     def proc_frame_no_interp(self,data):
-        self.hann(data)
+        self.hann_wrap(data)
         self.FFT(self.result_hann)
         res_gpu = self.fft_buffer.get()
         return res_gpu
@@ -207,6 +207,7 @@ if __name__ == '__main__':
     fp = FrameProcessor(2)
     
     for i,n in enumerate(range(2,66,2)):
+        
         fp.set_nlines(n)
         # Initialize frameprocessor object
         if i==0:
