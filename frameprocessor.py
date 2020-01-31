@@ -41,7 +41,7 @@ class FrameProcessor():
     def set_nlines(self,nlines):
         n = nlines # number of A-lines per frame
         alen = 2048 # length of A-line / # of spec. bins
-        self.n = n
+        self.nlines = n
         self.dshape = (alen,n)
         self.data_prefft = self.npcast(np.zeros(self.dshape),self.dt_prefft)
         self.data_fft = self.npcast(np.zeros(self.dshape),self.dt_fft)
