@@ -90,18 +90,18 @@ class FrameProcessor():
         self.queue = cl.CommandQueue(self.context)
         # POCL input buffers
         mflags = cl.mem_flags
-        self.win_g = cl.Buffer(self.context, mflags.READ_ONLY | mflags.COPY_HOST_PTR, hostbuf=hanning_win)
-        self.nn0_g = cl.Buffer(self.context, mflags.READ_ONLY | mflags.COPY_HOST_PTR, hostbuf=self.nn0)
-        self.nn1_g = cl.Buffer(self.context, mflags.READ_ONLY | mflags.COPY_HOST_PTR, hostbuf=self.nn1)
-        self.k_lin_g = cl.Buffer(self.context, mflags.READ_ONLY | mflags.COPY_HOST_PTR, hostbuf=self.k_lin)
-        self.k_raw_g = cl.Buffer(self.context, mflags.READ_ONLY | mflags.COPY_HOST_PTR, hostbuf=self.k_raw)
-        self.d_k_g = cl.Buffer(self.context, mflags.READ_ONLY | mflags.COPY_HOST_PTR, hostbuf=self.d_k)
+        self.win_g = cl.Buffer(self.context, mflags.READ_ONLY | mflags.ALLOC_HOST_PTR | mflags.COPY_HOST_PTR, hostbuf=hanning_win)
+        self.nn0_g = cl.Buffer(self.context, mflags.READ_ONLY | mflags.ALLOC_HOST_PTR | mflags.COPY_HOST_PTR, hostbuf=self.nn0)
+        self.nn1_g = cl.Buffer(self.context, mflags.READ_ONLY | mflags.ALLOC_HOST_PTR | mflags.COPY_HOST_PTR, hostbuf=self.nn1)
+        self.k_lin_g = cl.Buffer(self.context, mflags.READ_ONLY | mflags.ALLOC_HOST_PTR | mflags.COPY_HOST_PTR, hostbuf=self.k_lin)
+        self.k_raw_g = cl.Buffer(self.context, mflags.READ_ONLY | mflags.ALLOC_HOST_PTR | mflags.COPY_HOST_PTR, hostbuf=self.k_raw)
+        self.d_k_g = cl.Buffer(self.context, mflags.READ_ONLY | mflags.ALLOC_HOST_PTR | mflags.COPY_HOST_PTR, hostbuf=self.d_k)
 
         # POCL output buffers
         self.npres_interp = self.npcast(np.zeros(self.dshape),self.dt_prefft)
         self.npres_hann = self.npcast(np.zeros(self.dshape),self.dt_prefft)
-        self.result_interp = cl.Buffer(self.context, cl.mem_flags.COPY_HOST_PTR, hostbuf=self.npres_interp)
-        self.result_hann = cl.Buffer(self.context, cl.mem_flags.COPY_HOST_PTR, hostbuf=self.npres_hann)
+        self.result_interp = cl.Buffer(self.context, cl.mem_flags.ALLOC_HOST_PTR | mflags.COPY_HOST_PTR, hostbuf=self.npres_interp)
+        self.result_hann = cl.Buffer(self.context, cl.mem_flags.ALLOC_HOST_PTR | mflags.COPY_HOST_PTR, hostbuf=self.npres_hann)
         
         # Define POCL global / local work group sizes
         self.global_wgsize = (2048,n)
@@ -142,6 +142,8 @@ class FrameProcessor():
         self.hann = self.program.hann
         self.interp = self.program.interp
     
+    
+    
     # Wraps FFT kernel
     def FFT(self,data):
         self.cfft(self.fft_buffer, data)
@@ -158,7 +160,7 @@ class FrameProcessor():
 
     def proc_frame(self,data):
         self.interp_hann(data)
-        self.FFT(self.result_hann)
+        self.FFT(self.result_interp)
         res_gpu = self.fft_buffer.get()
         return res_gpu
 
@@ -169,7 +171,7 @@ if __name__ == '__main__':
     fs=[]
     afs=[]
     
-    for i,n in enumerate(range(4,100,2)):
+    for i,n in enumerate(range(2,200,4)):
         
         # Initialize frameprocessor object
         fp = FrameProcessor(n)
