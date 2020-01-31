@@ -38,21 +38,38 @@ class FrameProcessor():
                     0));
             """)
     
-    def __init__(self,nlines):
-
-        # Define data formatting
+    def set_nlines(self,nlines):
         n = nlines # number of A-lines per frame
         alen = 2048 # length of A-line / # of spec. bins
         self.n = n
         self.dshape = (alen,n)
-        self.dt_prefft = np.float32
-        self.dt_fft = np.complex64
         self.data_prefft = self.npcast(np.zeros(self.dshape),self.dt_prefft)
         self.data_fft = self.npcast(np.zeros(self.dshape),self.dt_fft)
+        # POCL output buffers
+        self.npres_interp = self.npcast(np.zeros(self.dshape),self.dt_prefft)
+        self.npres_hann = self.npcast(np.zeros(self.dshape),self.dt_prefft)
+        self.result_interp = cl.Buffer(self.context, self.mflags.ALLOC_HOST_PTR | self.mflags.COPY_HOST_PTR, hostbuf=self.npres_interp)
+        self.result_hann = cl.Buffer(self.context, self.mflags.ALLOC_HOST_PTR | self.mflags.COPY_HOST_PTR, hostbuf=self.npres_hann)
 
-        # Load spectrometer bins and prepare for interpolation / hanning operation
-        hanning_win = self.npcast(np.hanning(2048),self.dt_prefft)
-        lam = self.npcast(np.load('lam.npy'),self.dt_prefft)
+        # Define POCL global / local work group sizes
+        self.global_wgsize = (2048,n)
+        self.local_wgsize = (256,1)
+
+        self.trf = self.get_complex_trf(self.data_prefft)
+        self.fft = FFT(self.trf.output,axes=(0,))
+        self.cfft = self.fft.parameter.input.connect(self.trf, self.trf.output, new_input=self.trf.input).compile(self.thr)
+        self.fft_buffer = self.thr.empty_like(self.cfft.parameter.output)
+        return
+
+    def set_apod_win(self,win):
+        self.apod_win=win
+        self.win_g = cl.Buffer(self.context, self.mflags.READ_ONLY | 
+                               self.mflags.ALLOC_HOST_PTR | self.mflags.COPY_HOST_PTR, hostbuf=self.apod_win)
+        return
+    
+    def set_chirp_arr(self,arr):
+        alen = 2048
+        lam = arr
         lmax = np.max(lam)
         lmin = np.min(lam)
         kmax = 1/lmin
@@ -79,8 +96,17 @@ class FrameProcessor():
                 nn1[i]=minind+1
 
         self.nn0=nn0
-        self.nn1=nn1
-
+        self.nn1=nn1        
+        mflags=self.mflags
+        self.nn0_g = cl.Buffer(self.context, mflags.READ_ONLY | mflags.ALLOC_HOST_PTR | mflags.COPY_HOST_PTR, hostbuf=self.nn0)
+        self.nn1_g = cl.Buffer(self.context, mflags.READ_ONLY | mflags.ALLOC_HOST_PTR | mflags.COPY_HOST_PTR, hostbuf=self.nn1)
+        self.k_lin_g = cl.Buffer(self.context, mflags.READ_ONLY | mflags.ALLOC_HOST_PTR | mflags.COPY_HOST_PTR, hostbuf=self.k_lin)
+        self.k_raw_g = cl.Buffer(self.context, mflags.READ_ONLY | mflags.ALLOC_HOST_PTR | mflags.COPY_HOST_PTR, hostbuf=self.k_raw)
+        self.d_k_g = cl.Buffer(self.context, mflags.READ_ONLY | mflags.ALLOC_HOST_PTR | mflags.COPY_HOST_PTR, hostbuf=self.d_k)
+        return
+    
+    def __init__(self,nlines):
+        
         # Initialize PyOpenCL platform, device, context, queue
         self.platform = cl.get_platforms()
         self.platform = self.platform[0]
@@ -88,32 +114,28 @@ class FrameProcessor():
         self.device = self.device[0]
         self.context = cl.Context([self.device])
         self.queue = cl.CommandQueue(self.context)
-        # POCL input buffers
-        mflags = cl.mem_flags
-        self.win_g = cl.Buffer(self.context, mflags.READ_ONLY | mflags.ALLOC_HOST_PTR | mflags.COPY_HOST_PTR, hostbuf=hanning_win)
-        self.nn0_g = cl.Buffer(self.context, mflags.READ_ONLY | mflags.ALLOC_HOST_PTR | mflags.COPY_HOST_PTR, hostbuf=self.nn0)
-        self.nn1_g = cl.Buffer(self.context, mflags.READ_ONLY | mflags.ALLOC_HOST_PTR | mflags.COPY_HOST_PTR, hostbuf=self.nn1)
-        self.k_lin_g = cl.Buffer(self.context, mflags.READ_ONLY | mflags.ALLOC_HOST_PTR | mflags.COPY_HOST_PTR, hostbuf=self.k_lin)
-        self.k_raw_g = cl.Buffer(self.context, mflags.READ_ONLY | mflags.ALLOC_HOST_PTR | mflags.COPY_HOST_PTR, hostbuf=self.k_raw)
-        self.d_k_g = cl.Buffer(self.context, mflags.READ_ONLY | mflags.ALLOC_HOST_PTR | mflags.COPY_HOST_PTR, hostbuf=self.d_k)
-
-        # POCL output buffers
-        self.npres_interp = self.npcast(np.zeros(self.dshape),self.dt_prefft)
-        self.npres_hann = self.npcast(np.zeros(self.dshape),self.dt_prefft)
-        self.result_interp = cl.Buffer(self.context, cl.mem_flags.ALLOC_HOST_PTR | mflags.COPY_HOST_PTR, hostbuf=self.npres_interp)
-        self.result_hann = cl.Buffer(self.context, cl.mem_flags.ALLOC_HOST_PTR | mflags.COPY_HOST_PTR, hostbuf=self.npres_hann)
         
-        # Define POCL global / local work group sizes
-        self.global_wgsize = (2048,n)
-        self.local_wgsize = (256,1)
-
-        # Initialize Reikna API, thread, FFT plan, output memory
+        # POCL memflags
+        self.mflags = cl.mem_flags
+        mflags=self.mflags
+        
+        # Initialize Reikna API, thread, FFT plan, output memor
         self.api = cluda.ocl_api()
         self.thr = self.api.Thread(self.queue)
-        self.trf = self.get_complex_trf(self.data_prefft)
-        self.fft = FFT(self.trf.output,axes=(0,))
-        self.cfft = self.fft.parameter.input.connect(self.trf, self.trf.output, new_input=self.trf.input).compile(self.thr)
-        self.fft_buffer = self.thr.empty_like(self.cfft.parameter.output)
+        
+        # Define data formatting
+        alen = 2048 # length of A-line / # of spec. bins
+        self.dt_prefft = np.float32
+        self.dt_fft = np.complex64
+        
+        # Load spectrometer bins and prepare for interpolation / hanning operation
+        hanning_win = self.npcast(np.hanning(2048),self.dt_prefft)
+        self.set_chirp_arr(self.npcast(np.load('lam.npy'),self.dt_prefft))
+        
+        
+        # Set apodization window and framesize (# of a-lines)
+        self.set_apod_win(hanning_win)
+        self.set_nlines(nlines)
         
         # kernels for hanning window, and interpolation
         self.program = cl.Program(self.context, """
@@ -151,16 +173,28 @@ class FrameProcessor():
 
     # Wraps interpolation and hanning window kernels
     def interp_hann(self,data):
-        self.data_pfg = cl.Buffer(self.context, cl.mem_flags.COPY_HOST_PTR, hostbuf=data)
+        self.data_pfg = cl.Buffer(self.context, self.mflags.COPY_HOST_PTR | self.mflags.ALLOC_HOST_PTR, hostbuf=data)
         self.hann.set_args(self.data_pfg,self.win_g,self.result_hann)
         cl.enqueue_nd_range_kernel(self.queue,self.hann,self.global_wgsize,self.local_wgsize)
         self.interp.set_args(self.result_hann,self.nn0_g,self.nn1_g,self.k_raw_g,self.k_lin_g,self.result_interp)
         cl.enqueue_nd_range_kernel(self.queue,self.interp,self.global_wgsize,self.local_wgsize)
         return
+    
+    def hann(self,data):
+        self.data_pfg = cl.Buffer(self.context, self.mflags.COPY_HOST_PTR | self.mflags.ALLOC_HOST_PTR, hostbuf=data)
+        self.hann.set_args(self.data_pfg,self.win_g,self.result_hann)
+        cl.enqueue_nd_range_kernel(self.queue,self.hann,self.global_wgsize,self.local_wgsize)
+        return
 
     def proc_frame(self,data):
         self.interp_hann(data)
         self.FFT(self.result_interp)
+        res_gpu = self.fft_buffer.get()
+        return res_gpu
+    
+    def proc_frame_no_interp(self,data):
+        self.hann(data)
+        self.FFT(self.result_hann)
         res_gpu = self.fft_buffer.get()
         return res_gpu
 
@@ -170,11 +204,11 @@ if __name__ == '__main__':
     ns=[]
     fs=[]
     afs=[]
+    fp = FrameProcessor(2)
     
-    for i,n in enumerate(range(2,200,4)):
-        
+    for i,n in enumerate(range(2,66,2)):
+        fp.set_nlines(n)
         # Initialize frameprocessor object
-        fp = FrameProcessor(n)
         if i==0:
             print('Using Device: %s'%(str(fp.device.name)))
         
