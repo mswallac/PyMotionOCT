@@ -34,12 +34,6 @@ class DispacementCalc():
         self.global_wgsize = (2048,n)
         self.local_wgsize = (256,1)
         return
-
-    def set_apod_win(self,win):
-        self.apod_win=win
-        self.win_g = cl.Buffer(self.context, self.mflags.READ_ONLY | 
-                               self.mflags.ALLOC_HOST_PTR | self.mflags.COPY_HOST_PTR, hostbuf=self.apod_win)
-        return
     
     def __init__(self,nlines):
         
