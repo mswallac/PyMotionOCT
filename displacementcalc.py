@@ -39,11 +39,15 @@ class DisplacemenctCalc():
         
         # Define POCL global / local work group sizes
         self.global_wgsize = (2048,n)
-        self.local_wgsize = (256,1)
+        self.local_wgsize = (512,1)
 
         self.fft_in = Type(self.dt, shape=self.dshape)
         self.fft = FFT(self.fft_in,axes=(0,))
         self.cfft = self.fft.compile(self.thr)
+#        self.tr_mp = transformations.mult_param(self.conj.parameter.in1)
+#        self.tr_cc = transformations.combine_complex(self.conj.parameter.in1)
+#        self.conj.parameter.in1.connect(self.tr, self.tr.output, in1=self.tr.real, in2=self.tr.imag)
+
         return
 
     def set_win(self,win):
@@ -87,20 +91,30 @@ class DisplacemenctCalc():
         # Set apodization window and framesize (# of a-lines)
         self.ga_fft = self.thr.array((self.dshape), dtype=np.complex64)
         self.gb_fft = self.thr.array((self.dshape), dtype=np.complex64)
-        self.r = self.thr.array((self.dshape), dtype=np.complex64)
+        self.npres_r = self.npcast(np.zeros(self.dshape),self.dt)
+        self.result_r = cl.Buffer(self.context, self.mflags.ALLOC_HOST_PTR | self.mflags.COPY_HOST_PTR, hostbuf=self.npres_r)
         self.r_ifft = self.thr.array((self.dshape), dtype=np.complex64)
         self.max_r = self.thr.array((self.dshape), dtype=np.complex64)
         
         # kernel for hanning window
         self.program = cl.Program(self.context, """
-        __kernel void hann(__global float *inp, __global const float *win, __global float *res)
+        #include <pyopencl-complex.h>
+        __kernel void hann(__global cfloat_t *inp, __global const float *win, __global cfloat_t *res)
         {
             int i = get_global_id(0)+(get_global_size(0)*get_global_id(1));
             int j = get_local_id(0)+(get_group_id(0)*get_local_size(0));
-            res[i] = inp[i]*win[j];
+            res[i] = cfloat_mulr(inp[i],win[j]);
+        }
+        __kernel void cpspec(__global cfloat_t *in1, __global const cfloat_t *in2, __global cfloat_t *res)
+        {
+            int i = get_global_id(0)+(get_global_size(0)*get_global_id(1));
+            cfloat_t gagb = cfloat_mul(in1[i],cfloat_conj(in2[i])) ;
+            res[i] = cfloat_divider(gagb,cfloat_abs(gagb));
         }
         """).build()
+
         self.hann = self.program.hann
+        self.cpspec = self.program.cpspec
 
     def example(self,ga,gb):
         self.hann.set_args(ga,self.win_g,self.result_hann_a)
@@ -109,7 +123,9 @@ class DisplacemenctCalc():
         cl.enqueue_nd_range_kernel(self.queue,self.hann,self.global_wgsize,self.local_wgsize)
         self.FFT(self.fft_buffer_a,self.result_hann_a)
         self.FFT(self.fft_buffer_b,self.result_hann_b)
-        return self.fft_buffer_a,self.fft_buffer_b
+        self.cpspec.set_args(self.fft_buffer_a,self.fft_buffer_b,self.result_r)
+        cl.enqueue_nd_range_kernel(self.queue,self.cpspec,self.global_wgsize,self.local_wgsize)
+        return self.result_r
 
     # Wraps FFT kernel
     def FFT(self,out,data):
@@ -127,10 +143,11 @@ if __name__ == '__main__':
     ga_g = cl.Buffer(dc.context, dc.mflags.ALLOC_HOST_PTR | dc.mflags.COPY_HOST_PTR, hostbuf=ga)
     gb_g = cl.Buffer(dc.context, dc.mflags.ALLOC_HOST_PTR | dc.mflags.COPY_HOST_PTR, hostbuf=gb)
     times=[]
-    n_frames=10000
+    n_frames=100
     for x in range(n_frames):
         t=time.time()
         a,b=dc.example(ga_g,gb_g)
+#        print(a,b)
         times.append(time.time()-t)
         
     # Calculate benchmark stats and add to lists
