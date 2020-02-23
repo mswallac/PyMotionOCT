@@ -123,9 +123,10 @@ class DisplacemenctCalc():
         cl.enqueue_nd_range_kernel(self.queue,self.hann,self.global_wgsize,self.local_wgsize)
         self.FFT(self.fft_buffer_a,self.result_hann_a)
         self.FFT(self.fft_buffer_b,self.result_hann_b)
-        self.cpspec.set_args(self.fft_buffer_a,self.fft_buffer_b,self.result_r)
+        self.cpspec.set_args(self.fft_buffer_a.data,self.fft_buffer_b.data,self.result_r)
         cl.enqueue_nd_range_kernel(self.queue,self.cpspec,self.global_wgsize,self.local_wgsize)
-        return self.result_r
+        cl.enqueue_copy(self.queue, self.npres_r, self.result_r)
+        return self.npres_r
 
     # Wraps FFT kernel
     def FFT(self,out,data):
@@ -146,8 +147,8 @@ if __name__ == '__main__':
     n_frames=100
     for x in range(n_frames):
         t=time.time()
-        a,b=dc.example(ga_g,gb_g)
-#        print(a,b)
+        r=dc.example(ga_g,gb_g)
+        print(r)
         times.append(time.time()-t)
         
     # Calculate benchmark stats and add to lists
