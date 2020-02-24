@@ -44,10 +44,6 @@ class DisplacemenctCalc():
         self.fft_in = Type(self.dt, shape=self.dshape)
         self.fft = FFT(self.fft_in,axes=(0,))
         self.cfft = self.fft.compile(self.thr)
-#        self.tr_mp = transformations.mult_param(self.conj.parameter.in1)
-#        self.tr_cc = transformations.combine_complex(self.conj.parameter.in1)
-#        self.conj.parameter.in1.connect(self.tr, self.tr.output, in1=self.tr.real, in2=self.tr.imag)
-
         return
 
     def set_win(self,win):
@@ -108,47 +104,49 @@ class DisplacemenctCalc():
         __kernel void cpspec(__global cfloat_t *in1, __global const cfloat_t *in2, __global cfloat_t *res)
         {
             int i = get_global_id(0)+(get_global_size(0)*get_global_id(1));
-            cfloat_t gagb = cfloat_mul(in1[i],cfloat_conj(in2[i])) ;
-            res[i] = cfloat_divider(gagb,cfloat_abs(gagb));
+            cfloat_t gagb = cfloat_mul(in1[i],cfloat_conj(in2[i]));
+            double gagb_abs = cfloat_abs(gagb)+0.00001;
+            res[i] = cfloat_divider(gagb,gagb_abs);
         }
         """).build()
 
         self.hann = self.program.hann
         self.cpspec = self.program.cpspec
 
-    def example(self,ga,gb):
+    def phase_corr(self,ga,gb):
         self.hann.set_args(ga,self.win_g,self.result_hann_a)
         cl.enqueue_nd_range_kernel(self.queue,self.hann,self.global_wgsize,self.local_wgsize)
         self.hann.set_args(gb,self.win_g,self.result_hann_b)
         cl.enqueue_nd_range_kernel(self.queue,self.hann,self.global_wgsize,self.local_wgsize)
-        self.FFT(self.fft_buffer_a,self.result_hann_a)
-        self.FFT(self.fft_buffer_b,self.result_hann_b)
+        self.FFT(self.fft_buffer_a,self.result_hann_a,0)
+        self.FFT(self.fft_buffer_b,self.result_hann_b,0)
         self.cpspec.set_args(self.fft_buffer_a.data,self.fft_buffer_b.data,self.result_r)
         cl.enqueue_nd_range_kernel(self.queue,self.cpspec,self.global_wgsize,self.local_wgsize)
-        cl.enqueue_copy(self.queue, self.npres_r, self.result_r)
-        return self.npres_r
+        self.FFT(self.r_ifft,self.result_r,1)
+        return self.r_ifft.get()
 
     # Wraps FFT kernel
-    def FFT(self,out,data):
-        self.cfft(out, data)
+    def FFT(self,out,data,inv):
+        self.cfft(out, data,inverse=inv)
         return
         
 if __name__ == '__main__':
     # Number of frames to benchmark with and empty lists for framerate / aline rate
     n=60
     dc=DisplacemenctCalc(n)
-    ga = np.random.random((2048,60)) + np.random.random((2048,60))*1j
-    ga = ga.astype(dc.dt)
-    gb = np.random.random((2048,60)) + np.random.random((2048,60))*1j
-    gb = gb.astype(dc.dt)
+    # Relative path to data in the form of .npy file of format [Z,X,B,T]
+    file = 'fig8_1.0z-3.npy'
+    data = np.load('C:\\Users\\black\\Google Drive\\PC Workspace\\Senior Design\\axial motion\\2-18-20-oct-motion\\'+file)
+    ga = dc.npcast(data[:,:,0,500],dc.dt)
+    gb = dc.npcast(data[:,:,0,502],dc.dt)
+    print(ga.shape,gb.shape)
     ga_g = cl.Buffer(dc.context, dc.mflags.ALLOC_HOST_PTR | dc.mflags.COPY_HOST_PTR, hostbuf=ga)
     gb_g = cl.Buffer(dc.context, dc.mflags.ALLOC_HOST_PTR | dc.mflags.COPY_HOST_PTR, hostbuf=gb)
     times=[]
-    n_frames=100
+    n_frames=10000
     for x in range(n_frames):
         t=time.time()
-        r=dc.example(ga_g,gb_g)
-        print(r)
+        r=dc.phase_corr(ga_g,gb_g)
         times.append(time.time()-t)
         
     # Calculate benchmark stats and add to lists
