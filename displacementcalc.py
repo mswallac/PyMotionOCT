@@ -22,7 +22,7 @@ from reikna.transformations import combine_complex
 import time
 
 class DisplacemenctCalc():
-
+    
     def npcast(self,inp,dt):
         return np.asarray(inp).astype(dt)
 
@@ -144,17 +144,19 @@ if __name__ == '__main__':
     # Number of frames to benchmark with and empty lists for framerate / aline rate
     dc=DisplacemenctCalc(80)
     # Relative path to data in the form of .npy file of format [Z,X,B,T]
-    file = 'fig8_1.0x-3.npy'
+    file = 'fig8_1.0x-2.npy'
     data = np.load('C:\\Users\\black\\Google Drive\\PC Workspace\\Senior Design\\axial motion\\2-18-20-oct-motion\\'+file)
-    ga = dc.npcast(data[:,:,1,100],dc.dt)
-    for i in range(5):
-        gb = dc.npcast(data[:,:,1,100*(i+1)],dc.dt)
-        plt.figure()
-        plt.subplot(1,2,1)
-        plt.imshow(np.abs(ga))
-        plt.subplot(1,2,2)
-        plt.imshow(np.abs(gb))
-        plt.show()
+    ga = dc.npcast(data[:,:,1,749],dc.dt)
+    plot = True
+    for i in range(4):
+        gb = dc.npcast(data[:,:,1,749-10*(i+1)],dc.dt)
+        if plot:
+            plt.figure()
+            plt.subplot(1,2,1)
+            plt.imshow(np.abs(ga))
+            plt.subplot(1,2,2)
+            plt.imshow(np.abs(gb))
+            plt.show()
         ga_g = cl.Buffer(dc.context, dc.mflags.ALLOC_HOST_PTR | dc.mflags.COPY_HOST_PTR, hostbuf=ga)
         gb_g = cl.Buffer(dc.context, dc.mflags.ALLOC_HOST_PTR | dc.mflags.COPY_HOST_PTR, hostbuf=gb)
         times=[]
@@ -164,10 +166,10 @@ if __name__ == '__main__':
             rc=dc.phase_corr(ga_g,gb_g)
             print('Y-disp: %d, X-disp: %d'%np.unravel_index(np.argmax(rc),rc.shape))
             times.append(time.time()-t)
-        
-        plt.figure()
-        plt.imshow(rc)
-        plt.show()
+        if plot:
+            plt.figure()
+            plt.imshow(rc)
+            plt.show()
         # Calculate benchmark stats and add to lists
         avginterval = np.mean(times)
         frate=(1/avginterval)
