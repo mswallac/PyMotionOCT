@@ -159,10 +159,11 @@ if __name__ == '__main__':
         ga_g = cl.Buffer(dc.context, dc.mflags.ALLOC_HOST_PTR | dc.mflags.COPY_HOST_PTR, hostbuf=ga)
         gb_g = cl.Buffer(dc.context, dc.mflags.ALLOC_HOST_PTR | dc.mflags.COPY_HOST_PTR, hostbuf=gb)
         times=[]
-        n_frames=1000
+        n_frames=1
         for x in range(n_frames):
             t=time.time()
             rc=dc.phase_corr(ga_g,gb_g)
+            print('Y-disp: %d, X-disp: %d'%np.unravel_index(np.argmax(rc),rc.shape))
             times.append(time.time()-t)
         
         plt.figure()
@@ -171,5 +172,6 @@ if __name__ == '__main__':
         # Calculate benchmark stats and add to lists
         avginterval = np.mean(times)
         frate=(1/avginterval)
+        afrate=frate*n
         print('Average framerate of %.1fHz over %d frames'%(frate,n_frames))    
     
