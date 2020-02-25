@@ -33,13 +33,13 @@ class DisplacemenctCalc():
         # Define data formatting
         self.dt = np.complex64
         n = nlines # number of A-lines per frame
-        alen = 2048 # length of A-line / # of spec. bins
+        alen = 242 # length of A-line / # of spec. bins
         self.nlines = n
         self.dshape = (alen,n)
         
         # Define POCL global / local work group sizes
-        self.global_wgsize = (2048,n)
-        self.local_wgsize = (512,1)
+        self.global_wgsize = (242,n)
+        self.local_wgsize = (121,1)
 
         self.fft_in = Type(self.dt, shape=self.dshape)
         self.fft = FFT(self.fft_in,axes=(0,))
@@ -74,7 +74,7 @@ class DisplacemenctCalc():
         self.set_nlines(nlines)
         
         # Prepare / hanning operation
-        hanning_win = self.npcast([np.hanning(2048)for x in range(nlines)],self.dt)
+        hanning_win = self.npcast([np.hanning(242)for x in range(nlines)],self.dt)
         self.set_win(hanning_win)
         
         self.npres_hann_a = self.npcast(np.zeros(self.dshape),self.dt)
@@ -87,10 +87,12 @@ class DisplacemenctCalc():
         # Set apodization window and framesize (# of a-lines)
         self.ga_fft = self.thr.array((self.dshape), dtype=np.complex64)
         self.gb_fft = self.thr.array((self.dshape), dtype=np.complex64)
-        self.npres_r = self.npcast(np.zeros(self.dshape),self.dt)
-        self.result_r = cl.Buffer(self.context, self.mflags.ALLOC_HOST_PTR | self.mflags.COPY_HOST_PTR, hostbuf=self.npres_r)
+        self.result_r= self.thr.array((self.dshape), dtype=np.complex64)
         self.r_ifft = self.thr.array((self.dshape), dtype=np.complex64)
-        self.max_r = self.thr.array((self.dshape), dtype=np.complex64)
+        self.npres_r_ifft_abs = self.npcast(np.zeros(self.dshape),np.float32)
+        self.r_ifft_abs = cl.Buffer(self.context, self.mflags.ALLOC_HOST_PTR | self.mflags.COPY_HOST_PTR, hostbuf=self.npres_r_ifft_abs)
+        self.npres_max_r = self.npcast(np.zeros(self.dshape),np.float32)
+        self.max_r = cl.Buffer(self.context, self.mflags.ALLOC_HOST_PTR | self.mflags.COPY_HOST_PTR, hostbuf=self.npres_max_r)
         
         # kernel for hanning window
         self.program = cl.Program(self.context, """
@@ -105,13 +107,19 @@ class DisplacemenctCalc():
         {
             int i = get_global_id(0)+(get_global_size(0)*get_global_id(1));
             cfloat_t gagb = cfloat_mul(in1[i],cfloat_conj(in2[i]));
-            double gagb_abs = cfloat_abs(gagb)+0.00001;
+            double gagb_abs = cfloat_abs(gagb)+0.0001;
             res[i] = cfloat_divider(gagb,gagb_abs);
+        }
+        __kernel void f_abs(__global cfloat_t *in1, __global float *res)
+        {
+            int i = get_global_id(0)+(get_global_size(0)*get_global_id(1));
+            res[i] = cfloat_abs(in1[i]);
         }
         """).build()
 
         self.hann = self.program.hann
         self.cpspec = self.program.cpspec
+        self.f_abs = self.program.f_abs
 
     def phase_corr(self,ga,gb):
         self.hann.set_args(ga,self.win_g,self.result_hann_a)
@@ -120,10 +128,13 @@ class DisplacemenctCalc():
         cl.enqueue_nd_range_kernel(self.queue,self.hann,self.global_wgsize,self.local_wgsize)
         self.FFT(self.fft_buffer_a,self.result_hann_a,0)
         self.FFT(self.fft_buffer_b,self.result_hann_b,0)
-        self.cpspec.set_args(self.fft_buffer_a.data,self.fft_buffer_b.data,self.result_r)
+        self.cpspec.set_args(self.fft_buffer_a.data,self.fft_buffer_b.data,self.result_r.data)
         cl.enqueue_nd_range_kernel(self.queue,self.cpspec,self.global_wgsize,self.local_wgsize)
         self.FFT(self.r_ifft,self.result_r,1)
-        return self.r_ifft.get()
+        self.f_abs.set_args(self.r_ifft.data,self.r_ifft_abs)
+        cl.enqueue_nd_range_kernel(self.queue,self.f_abs,self.global_wgsize,self.local_wgsize)
+        cl.enqueue_copy(self.queue, self.npres_r_ifft_abs, self.r_ifft_abs)
+        return self.npres_r_ifft_abs
 
     # Wraps FFT kernel
     def FFT(self,out,data,inv):
@@ -132,26 +143,33 @@ class DisplacemenctCalc():
         
 if __name__ == '__main__':
     # Number of frames to benchmark with and empty lists for framerate / aline rate
-    n=60
-    dc=DisplacemenctCalc(n)
+    dc=DisplacemenctCalc(80)
     # Relative path to data in the form of .npy file of format [Z,X,B,T]
-    file = 'fig8_1.0z-3.npy'
+    file = 'fig8_1.0x-3.npy'
     data = np.load('C:\\Users\\black\\Google Drive\\PC Workspace\\Senior Design\\axial motion\\2-18-20-oct-motion\\'+file)
-    ga = dc.npcast(data[:,:,0,500],dc.dt)
-    gb = dc.npcast(data[:,:,0,502],dc.dt)
-    print(ga.shape,gb.shape)
-    ga_g = cl.Buffer(dc.context, dc.mflags.ALLOC_HOST_PTR | dc.mflags.COPY_HOST_PTR, hostbuf=ga)
-    gb_g = cl.Buffer(dc.context, dc.mflags.ALLOC_HOST_PTR | dc.mflags.COPY_HOST_PTR, hostbuf=gb)
-    times=[]
-    n_frames=10000
-    for x in range(n_frames):
-        t=time.time()
-        r=dc.phase_corr(ga_g,gb_g)
-        times.append(time.time()-t)
+    ga = dc.npcast(data[:,:,1,100],dc.dt)
+    for i in range(5):
+        gb = dc.npcast(data[:,:,1,100*(i+1)],dc.dt)
+        plt.figure()
+        plt.subplot(1,2,1)
+        plt.imshow(np.abs(ga))
+        plt.subplot(1,2,2)
+        plt.imshow(np.abs(gb))
+        plt.show()
+        ga_g = cl.Buffer(dc.context, dc.mflags.ALLOC_HOST_PTR | dc.mflags.COPY_HOST_PTR, hostbuf=ga)
+        gb_g = cl.Buffer(dc.context, dc.mflags.ALLOC_HOST_PTR | dc.mflags.COPY_HOST_PTR, hostbuf=gb)
+        times=[]
+        n_frames=1000
+        for x in range(n_frames):
+            t=time.time()
+            rc=dc.phase_corr(ga_g,gb_g)
+            times.append(time.time()-t)
         
-    # Calculate benchmark stats and add to lists
-    avginterval = np.mean(times)
-    frate=(1/avginterval)
-    afrate=frate*n
-    print('Average framerate of %.1fHz over %d frames'%(frate,n_frames))    
+        plt.figure()
+        plt.imshow(rc)
+        plt.show()
+        # Calculate benchmark stats and add to lists
+        avginterval = np.mean(times)
+        frate=(1/avginterval)
+        print('Average framerate of %.1fHz over %d frames'%(frate,n_frames))    
     
