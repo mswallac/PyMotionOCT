@@ -64,7 +64,6 @@ class DisplacemenctCalc():
         
         # POCL memflags
         self.mflags = cl.mem_flags
-        mflags=self.mflags
         
         # Initialize Reikna API, thread, FFT plan, output memor
         self.api = cluda.ocl_api()
@@ -172,6 +171,5 @@ if __name__ == '__main__':
         # Calculate benchmark stats and add to lists
         avginterval = np.mean(times)
         frate=(1/avginterval)
-        afrate=frate*n
         print('Average framerate of %.1fHz over %d frames'%(frate,n_frames))    
     
