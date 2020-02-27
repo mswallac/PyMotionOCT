@@ -5,21 +5,27 @@ Created on Wed Jan 15 10:17:16 2020
 @author: Mike
 """
 
+import matplotlib.pyplot as plt
+import time
+
 from reikna.core import Annotation, Type, Transformation, Parameter
-from reikna.cluda import dtypes, any_api
-from pyopencl import cltypes
-from pyopencl import array
-import pyopencl as cl
+from reikna.cluda import dtypes, any_api, Snippet
+from reikna.algorithms import Reduce, predicate_sum
 from reikna.fft import FFT
 from reikna import cluda
+from pyopencl import cltypes
+from pyopencl import array
+from numba import jit
+import pyopencl as cl
 import numpy as np
-import matplotlib.pyplot as plt
-from reikna.cluda import Snippet
-from reikna.algorithms import PureParallel
-from reikna.linalg import MatrixMul
-import reikna.transformations as transformations
-from reikna.transformations import combine_complex
-import time
+import reikna
+
+@jit
+def arg_max(arr):
+    return np.argmax(arr)
+
+def arg_max_ij(arr):
+    return np.unravel_index(arg_max(arr),arr.shape)
 
 class DisplacemenctCalc():
     
@@ -42,6 +48,7 @@ class DisplacemenctCalc():
         self.local_wgsize = (121,1)
 
         self.fft_in = Type(self.dt, shape=self.dshape)
+        self.fft_in_sum = Type(self.dt, shape=(self.dshape[1],))
         self.fft = FFT(self.fft_in,axes=(0,))
         self.cfft = self.fft.compile(self.thr)
         return
@@ -83,7 +90,7 @@ class DisplacemenctCalc():
         self.fft_buffer_a = self.thr.empty_like(self.fft.parameter.output)
         self.fft_buffer_b = self.thr.empty_like(self.fft.parameter.output)
         
-        # Set apodization window and framesize (# of a-lines)
+        # BUFFERS / GPU ARRRAYS FOR PHASE CORRELATION
         self.ga_fft = self.thr.array((self.dshape), dtype=np.complex64)
         self.gb_fft = self.thr.array((self.dshape), dtype=np.complex64)
         self.result_r= self.thr.array((self.dshape), dtype=np.complex64)
@@ -92,6 +99,10 @@ class DisplacemenctCalc():
         self.r_ifft_abs = cl.Buffer(self.context, self.mflags.ALLOC_HOST_PTR | self.mflags.COPY_HOST_PTR, hostbuf=self.npres_r_ifft_abs)
         self.npres_max_r = self.npcast(np.zeros(self.dshape),np.float32)
         self.max_r = cl.Buffer(self.context, self.mflags.ALLOC_HOST_PTR | self.mflags.COPY_HOST_PTR, hostbuf=self.npres_max_r)
+        
+        # BUFFERS / GPU ARRAYS FOR AGPF
+        self.npres_agpf = self.npcast(np.zeros(self.dshape),np.float32)
+        self.res_agpf = cl.Buffer(self.context, self.mflags.ALLOC_HOST_PTR | self.mflags.COPY_HOST_PTR, hostbuf=self.npres_agpf)
         
         # kernel for hanning window
         self.program = cl.Program(self.context, """
@@ -109,6 +120,16 @@ class DisplacemenctCalc():
             double gagb_abs = cfloat_abs(gagb)+0.0001;
             res[i] = cfloat_divider(gagb,gagb_abs);
         }
+        __kernel void agpf_mult(__global cfloat_t *in1, __global const cfloat_t *in2, __global cfloat_t *res)
+        {
+            int i = get_global_id(0)+(get_global_size(0)*get_global_id(1));
+            res[i] = (cfloat_mul(in1[i],cfloat_conj(in2[i])));
+        }
+        __kernel void agpf_arg(__global cfloat_t *in1, __global float *res)
+        {
+            int i = get_global_id(0)+(get_global_size(0)*get_global_id(1));
+            res[i] = cfloat_argument(in1[i]);
+        }
         __kernel void f_abs(__global cfloat_t *in1, __global float *res)
         {
             int i = get_global_id(0)+(get_global_size(0)*get_global_id(1));
@@ -119,6 +140,8 @@ class DisplacemenctCalc():
         self.hann = self.program.hann
         self.cpspec = self.program.cpspec
         self.f_abs = self.program.f_abs
+        self.agpf_mult = self.program.agpf_mult
+        self.agpf_arg = self.program.agpf_arg
 
     def phase_corr(self,ga,gb):
         self.hann.set_args(ga,self.win_g,self.result_hann_a)
@@ -133,8 +156,16 @@ class DisplacemenctCalc():
         self.f_abs.set_args(self.r_ifft.data,self.r_ifft_abs)
         cl.enqueue_nd_range_kernel(self.queue,self.f_abs,self.global_wgsize,self.local_wgsize)
         cl.enqueue_copy(self.queue, self.npres_r_ifft_abs, self.r_ifft_abs)
-        return self.npres_r_ifft_abs
-
+        idxs = arg_max_ij(self.npres_r_ifft_abs)
+        return idxs
+    
+    def agpf(self,ga,gb):
+        self.agpf_mult.set_args(ga,gb,self.res_agpf)
+        cl.enqueue_nd_range_kernel(self.queue,self.agpf_mult,self.global_wgsize,self.local_wgsize)
+        cl.enqueue_copy(self.queue, self.npres_agpf, self.res_agpf)
+        return self.npres_agpf
+        
+    
     # Wraps FFT kernel
     def FFT(self,out,data,inv):
         self.cfft(out, data,inverse=inv)
@@ -147,8 +178,8 @@ if __name__ == '__main__':
     file = 'fig8_1.0x-2.npy'
     data = np.load('C:\\Users\\black\\Google Drive\\PC Workspace\\Senior Design\\axial motion\\2-18-20-oct-motion\\'+file)
     ga = dc.npcast(data[:,:,1,749],dc.dt)
-    plot = True
-    for i in range(4):
+    plot = False
+    for i in range(5):
         gb = dc.npcast(data[:,:,1,749-10*(i+1)],dc.dt)
         if plot:
             plt.figure()
@@ -164,11 +195,14 @@ if __name__ == '__main__':
         for x in range(n_frames):
             t=time.time()
             rc=dc.phase_corr(ga_g,gb_g)
-            print('Y-disp: %d, X-disp: %d'%np.unravel_index(np.argmax(rc),rc.shape))
+            rc=dc.phase_corr(ga_g,gb_g)
+            print('Y-disp: %d, X-disp: %d'%rc)
+            a=dc.agpf(ga_g,gb_g)
+            print(a)
             times.append(time.time()-t)
         if plot:
             plt.figure()
-            plt.imshow(rc)
+            plt.imshow(np.abs(a))
             plt.show()
         # Calculate benchmark stats and add to lists
         avginterval = np.mean(times)
