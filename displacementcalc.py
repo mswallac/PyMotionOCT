@@ -18,11 +18,12 @@ from pyopencl import array
 from numba import jit
 import pyopencl as cl
 import numpy as np
-import reikna
 
-@jit
 def arg_max(arr):
     return np.argmax(arr)
+
+def arr_sum(arr):
+    return np.sum(arr,axis=1)
 
 def arg_max_ij(arr):
     return np.unravel_index(arg_max(arr),arr.shape)
@@ -45,7 +46,7 @@ class DisplacemenctCalc():
         
         # Define POCL global / local work group sizes
         self.global_wgsize = (242,n)
-        self.local_wgsize = (121,1)
+        self.local_wgsize = (11,1)
 
         self.fft_in = Type(self.dt, shape=self.dshape)
         self.fft_in_sum = Type(self.dt, shape=(self.dshape[1],))
@@ -80,7 +81,7 @@ class DisplacemenctCalc():
         self.set_nlines(nlines)
         
         # Prepare / hanning operation
-        hanning_win = self.npcast([np.hanning(242)for x in range(nlines)],self.dt)
+        hanning_win = self.npcast([np.hanning(242) for x in range(nlines)],self.dt)
         self.set_win(hanning_win)
         
         self.npres_hann_a = self.npcast(np.zeros(self.dshape),self.dt)
@@ -159,11 +160,27 @@ class DisplacemenctCalc():
         idxs = arg_max_ij(self.npres_r_ifft_abs)
         return idxs
     
+    def phase_corr_nj(self,ga,gb):
+        self.hann.set_args(ga,self.win_g,self.result_hann_a)
+        cl.enqueue_nd_range_kernel(self.queue,self.hann,self.global_wgsize,self.local_wgsize)
+        self.hann.set_args(gb,self.win_g,self.result_hann_b)
+        cl.enqueue_nd_range_kernel(self.queue,self.hann,self.global_wgsize,self.local_wgsize)
+        self.FFT(self.fft_buffer_a,self.result_hann_a,0)
+        self.FFT(self.fft_buffer_b,self.result_hann_b,0)
+        self.cpspec.set_args(self.fft_buffer_a.data,self.fft_buffer_b.data,self.result_r.data)
+        cl.enqueue_nd_range_kernel(self.queue,self.cpspec,self.global_wgsize,self.local_wgsize)
+        self.FFT(self.r_ifft,self.result_r,1)
+        self.f_abs.set_args(self.r_ifft.data,self.r_ifft_abs)
+        cl.enqueue_nd_range_kernel(self.queue,self.f_abs,self.global_wgsize,self.local_wgsize)
+        cl.enqueue_copy(self.queue, self.npres_r_ifft_abs, self.r_ifft_abs)
+        idxs = arg_max_ij(self.npres_r_ifft_abs)
+        return idxs
+    
     def agpf(self,ga,gb):
         self.agpf_mult.set_args(ga,gb,self.res_agpf)
         cl.enqueue_nd_range_kernel(self.queue,self.agpf_mult,self.global_wgsize,self.local_wgsize)
         cl.enqueue_copy(self.queue, self.npres_agpf, self.res_agpf)
-        return self.npres_agpf
+        return arr_sum(self.npres_agpf)
         
     
     # Wraps FFT kernel
@@ -172,40 +189,49 @@ class DisplacemenctCalc():
         return
         
 if __name__ == '__main__':
-    # Number of frames to benchmark with and empty lists for framerate / aline rate
-    dc=DisplacemenctCalc(80)
-    # Relative path to data in the form of .npy file of format [Z,X,B,T]
-    file = 'fig8_1.0x-2.npy'
-    data = np.load('C:\\Users\\black\\Google Drive\\PC Workspace\\Senior Design\\axial motion\\2-18-20-oct-motion\\'+file)
-    ga = dc.npcast(data[:,:,1,749],dc.dt)
-    plot = False
-    for i in range(5):
-        gb = dc.npcast(data[:,:,1,749-10*(i+1)],dc.dt)
-        if plot:
-            plt.figure()
-            plt.subplot(1,2,1)
-            plt.imshow(np.abs(ga))
-            plt.subplot(1,2,2)
-            plt.imshow(np.abs(gb))
-            plt.show()
+    widths=np.arange(2,200,20)
+    rates = []
+    for idx,n in enumerate(widths):
+        # Number of frames to benchmark with and empty lists for framerate / aline rate
+        dc=DisplacemenctCalc(np.int16(n))
+        
+        # Relative path to data in the form of .npy file of format [Z,X,B,T]
+        file = 'fig8_1.0x-1.npy'
+        data = np.load('C:\\Users\\black\\Google Drive\\PC Workspace\\Senior Design\\axial motion\\2-18-20-oct-motion\\'+file)
+        ga = dc.npcast(data[:,:,1,749],dc.dt)
+        plot = False
+    
+        
+        gb = dc.npcast(data[:,:,1,740],dc.dt)
         ga_g = cl.Buffer(dc.context, dc.mflags.ALLOC_HOST_PTR | dc.mflags.COPY_HOST_PTR, hostbuf=ga)
         gb_g = cl.Buffer(dc.context, dc.mflags.ALLOC_HOST_PTR | dc.mflags.COPY_HOST_PTR, hostbuf=gb)
         times=[]
-        n_frames=1
+        n_frames=10000
+        
         for x in range(n_frames):
             t=time.time()
             rc=dc.phase_corr(ga_g,gb_g)
             rc=dc.phase_corr(ga_g,gb_g)
-            print('Y-disp: %d, X-disp: %d'%rc)
             a=dc.agpf(ga_g,gb_g)
-            print(a)
             times.append(time.time()-t)
-        if plot:
-            plt.figure()
-            plt.imshow(np.abs(a))
-            plt.show()
+            
         # Calculate benchmark stats and add to lists
         avginterval = np.mean(times)
-        frate=(1/avginterval)
-        print('Average framerate of %.1fHz over %d frames'%(frate,n_frames))    
+        frate=(1/avginterval)*n*2
+        rates.append(frate)
+            
+        print('%d/%d'%(idx+1,len(widths)))
+        print(frate)
+    plt.plot(widths,np.array(rates)/1000)
+    plt.title('A-line rate of GPU Motion Quantification Algorithm')
+    plt.xlabel('A-lines per frame')
+    plt.ylabel('A-line rate (kHz)')
+    plt.legend([''])
+    arb = np.array([0,185])
+    ln1 = np.array([38,38])
+    ln2 = np.array([76,76])
+    ln3 = np.array([146,146])
+    plt.plot(arb,ln1,'k--',linewidth=1.5,alpha=0.8)
+    plt.plot(arb,ln2,'k--',linewidth=1.5,alpha=0.8)
+    plt.plot(arb,ln3,'k--',linewidth=1.5,alpha=0.8)
     
